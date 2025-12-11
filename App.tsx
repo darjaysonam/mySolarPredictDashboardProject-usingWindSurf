@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Sun, History, CloudLightning, Database, Clock, CloudRain, FileJson, FileSpreadsheet, ArrowRight, RefreshCw, Calendar, TrendingUp, Zap, AlertTriangle, CheckCircle, Download, Loader2 } from 'lucide-react';
 import InputSection from './components/InputSection';
 import SolarChart from './components/SolarChart';
+import Past10DaysDashboard from './components/Past10DaysDashboard';
 import { generateSolarForecast } from './services/geminiService';
-import { fetchWeatherForecast, fetchRecentHistoricalWeather, fetchHistoricalWeather, EnhancedWeatherForecast, HistoricalWeatherData, calculateSolarPotential } from './services/weatherService';
+import { fetchWeatherForecast, fetchRecentHistoricalWeather, fetchHistoricalWeather, fetchPast10DaysData, EnhancedWeatherForecast, HistoricalWeatherData, calculateSolarPotential } from './services/weatherService';
 import { getHistory, saveSession } from './services/storageService';
 import { AppState, ForecastPoint, LocationData, SolarDataPoint, StoredSession, Theme } from './types';
 import { format, parseISO, isValid, subDays } from 'date-fns';
@@ -95,6 +96,7 @@ function App() {
   const [currentForecast, setCurrentForecast] = useState<ForecastPoint[]>([]);
   const [currentWeatherData, setCurrentWeatherData] = useState<EnhancedWeatherForecast | null>(null);
   const [historicalWeatherData, setHistoricalWeatherData] = useState<HistoricalWeatherData | null>(null);
+  const [past10DaysData, setPast10DaysData] = useState<HistoricalWeatherData | null>(null);
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [currentLocationName, setCurrentLocationName] = useState<string>('');
   const [pastSessions, setPastSessions] = useState<StoredSession[]>([]);
@@ -103,6 +105,7 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [showPast10Days, setShowPast10Days] = useState<boolean>(false);
   
   // Date Range State for Downloads - now supports historical dates
   const [downloadStartDate, setDownloadStartDate] = useState<string>('');
@@ -112,9 +115,9 @@ function App() {
 
   const durationOptions = [6, 12, 24, 48, 72, 168, 0];
 
-  // Calculate date limits - allow up to 2 years of historical data
+  // Calculate date limits - allow access to ERA5 historical data (1940 onwards)
   const today = new Date();
-  const minHistoricalDate = format(subDays(today, 730), 'yyyy-MM-dd'); // 2 years back
+  const minHistoricalDate = '1940-01-01'; // ERA5 dataset starts from 1940
   const maxForecastDate = format(subDays(today, -7), 'yyyy-MM-dd'); // 7 days forward
 
   useEffect(() => {
@@ -167,7 +170,7 @@ function App() {
     }
   }, [currentLocation, isRefreshing]);
 
-  const handleDataReady = async (location: LocationData, locationName: string) => {
+  const handleDataReady = async (location: LocationData, locationName: string, historical?: { startDate: string; endDate: string }) => {
     try {
       setCurrentLocation(location);
       setCurrentLocationName(locationName);
@@ -179,19 +182,60 @@ function App() {
       setDownloadStartDate(todayStr);
       setDownloadEndDate(todayStr);
 
-      // Fetch current weather forecast
-      const weatherData = await fetchWeatherForecast(location);
-      setCurrentWeatherData(weatherData);
+      let weatherData: EnhancedWeatherForecast;
+      let forecastOrHistorical: EnhancedWeatherForecast | HistoricalWeatherData | null = null;
 
-      // Fetch historical data in parallel (non-blocking)
-      fetchRecentHistoricalWeather(location)
-        .then(historical => {
-          setHistoricalWeatherData(historical);
-          console.log('Historical data loaded:', historical.time.length, 'hours');
-        })
-        .catch(err => {
-          console.warn('Historical data unavailable:', err);
-        });
+      if (historical) {
+        // Fetch historical data
+        console.log(`Fetching historical data from ${historical.startDate} to ${historical.endDate}`);
+        const historicalData = await fetchHistoricalWeather(location, historical.startDate, historical.endDate);
+        setHistoricalWeatherData(historicalData);
+        
+        // Convert historical data to forecast format for display
+        const convertedForecast: EnhancedWeatherForecast = {
+          time: historicalData.time,
+          temperature_2m: historicalData.temperature_2m,
+          cloud_cover: historicalData.cloud_cover,
+          shortwave_radiation: historicalData.shortwave_radiation,
+          humidity: historicalData.humidity,
+          windSpeed: historicalData.windSpeed,
+          windDirection: [],
+          pressure: historicalData.pressure,
+          precipitation: historicalData.precipitation,
+          uvIndex: [],
+          visibility: [],
+          dewPoint: [],
+          apparentTemperature: [],
+          lastUpdated: new Date().toISOString()
+        };
+        
+        weatherData = convertedForecast;
+        forecastOrHistorical = historicalData;
+      } else {
+        // Fetch current weather forecast
+        weatherData = await fetchWeatherForecast(location);
+        setCurrentWeatherData(weatherData);
+
+        // Fetch historical data in parallel (non-blocking)
+        fetchRecentHistoricalWeather(location)
+          .then(historical => {
+            setHistoricalWeatherData(historical);
+            console.log('Historical data loaded:', historical.time.length, 'hours');
+          })
+          .catch(err => {
+            console.warn('Historical data unavailable:', err);
+          });
+
+        // Fetch past 10 days data for dashboard (non-blocking)
+        fetchPast10DaysData(location)
+          .then(past10Days => {
+            setPast10DaysData(past10Days);
+            console.log('Past 10 days data loaded:', past10Days.time.length, 'hours');
+          })
+          .catch(err => {
+            console.warn('Past 10 days data unavailable:', err);
+          });
+      }
 
       setAppState(AppState.ANALYZING);
       
@@ -203,7 +247,7 @@ function App() {
       
       const newSession = saveSession({
         location,
-        fileName: locationName,
+        fileName: locationName + (historical ? ` (${historical.startDate} to ${historical.endDate})` : ''),
         forecast,
       });
       
@@ -224,6 +268,8 @@ function App() {
     setCurrentHistory([]); 
     setCurrentWeatherData(null);
     setHistoricalWeatherData(null);
+    setPast10DaysData(null);
+    setShowPast10Days(false);
     setAppState(AppState.SUCCESS);
     
     // Refresh weather data for loaded session
@@ -463,14 +509,12 @@ function App() {
       <header className={`border-b ${currentTheme.classes.border} ${currentTheme.classes.bgHeader} backdrop-blur-xl sticky top-0 z-50 transition-colors duration-300`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-yellow-400 to-orange-500 p-2.5 rounded-xl shadow-lg shadow-orange-500/20">
-              <Sun className="w-5 h-5 text-white" />
-            </div>
+            <img src="/logo.png" alt="Nyim-Namzhi Rigpa logo" className="w-10 h-10 object-contain" />
             <div>
               <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-                SolarCast AI
+                Nyim-Namzhi Rigpa
               </h1>
-              <p className={`text-xs ${currentTheme.classes.textDim} hidden sm:block`}>Real-time Solar Forecasting</p>
+              <p className={`text-xs ${currentTheme.classes.textDim} hidden sm:block`}>Solar Energy Intelligence</p>
             </div>
           </div>
           
@@ -670,119 +714,158 @@ function App() {
             {appState === AppState.SUCCESS && currentForecast.length > 0 && (
               <div className="space-y-4">
                 
-                {/* Control Bar */}
-                <div className={`flex flex-col gap-3 bg-black/20 p-3 rounded-xl border ${currentTheme.classes.border}`}>
-                  {/* Duration Selector Row */}
-                  <div className="flex items-center gap-3">
-                    <div className={`flex items-center gap-2 text-xs ${currentTheme.classes.textMuted}`}>
-                      <Clock className="w-4 h-4" />
-                      <span className="hidden sm:inline">View:</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {durationOptions.map(hours => (
-                        <button
-                          key={hours}
-                          onClick={() => setViewDuration(hours)}
-                          className={`px-2.5 py-1.5 text-xs font-medium rounded-lg transition-all ${
-                            viewDuration === hours
-                              ? currentTheme.classes.buttonActive
-                              : `${currentTheme.classes.buttonSecondary} hover:bg-white/10`
-                          }`}
-                        >
-                          {hours === 0 ? 'All' : hours === 168 ? '7d' : `${hours}h`}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Download Data Row */}
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2 border-t border-white/5">
-                    <div className={`flex items-center gap-2 text-xs ${currentTheme.classes.textMuted}`}>
-                      <Download className="w-4 h-4" />
-                      <span>Download Data:</span>
-                    </div>
-                    
-                    <div className="flex flex-wrap items-center gap-2 flex-1">
-                      {/* Date Range Picker */}
-                      <div className={`flex items-center gap-2 ${currentTheme.classes.bgInput} rounded-lg px-2 py-1.5 border border-white/5 flex-1 sm:flex-none`}>
-                        <Calendar className={`w-3.5 h-3.5 ${currentTheme.classes.textDim} flex-shrink-0`} />
-                        <input
-                          type="date"
-                          min={minHistoricalDate}
-                          max={maxForecastDate}
-                          value={downloadStartDate}
-                          onChange={(e) => {
-                            const newStart = e.target.value;
-                            if (newStart) {
-                              setDownloadStartDate(newStart);
-                              if (newStart > downloadEndDate) setDownloadEndDate(newStart);
-                              setDownloadError('');
-                            }
-                          }}
-                          className={`bg-transparent text-xs font-medium outline-none cursor-pointer ${currentTheme.classes.textMain} [color-scheme:dark] w-[110px]`}
-                        />
-                        <ArrowRight className={`w-3 h-3 ${currentTheme.classes.textDim} flex-shrink-0`} />
-                        <input
-                          type="date"
-                          min={minHistoricalDate}
-                          max={maxForecastDate}
-                          value={downloadEndDate}
-                          onChange={(e) => {
-                            const newEnd = e.target.value;
-                            if (newEnd) {
-                              setDownloadEndDate(newEnd);
-                              if (newEnd < downloadStartDate) setDownloadStartDate(newEnd);
-                              setDownloadError('');
-                            }
-                          }}
-                          className={`bg-transparent text-xs font-medium outline-none cursor-pointer ${currentTheme.classes.textMain} [color-scheme:dark] w-[110px]`}
-                        />
-                      </div>
-
-                      {/* Download Buttons */}
-                      <div className="flex gap-1">
-                        <button 
-                          onClick={() => downloadData('csv')}
-                          disabled={isDownloadingHistorical}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg ${currentTheme.classes.buttonSecondary} border border-white/5 hover:bg-white/10 transition-all disabled:opacity-50`}
-                          title="Download as CSV"
-                        >
-                          {isDownloadingHistorical ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <FileSpreadsheet className="w-3.5 h-3.5" />
-                          )}
-                          CSV
-                        </button>
-                        <button 
-                          onClick={() => downloadData('json')}
-                          disabled={isDownloadingHistorical}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg ${currentTheme.classes.buttonSecondary} border border-white/5 hover:bg-white/10 transition-all disabled:opacity-50`}
-                          title="Download as JSON"
-                        >
-                          {isDownloadingHistorical ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <FileJson className="w-3.5 h-3.5" />
-                          )}
-                          JSON
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Date range info */}
-                  <div className={`text-xs ${currentTheme.classes.textDim} flex items-center gap-2`}>
-                    <span>📅 Select any date from {format(parseISO(minHistoricalDate), 'MMM yyyy')} to {format(parseISO(maxForecastDate), 'MMM dd, yyyy')} (historical + forecast)</span>
-                  </div>
-
-                  {/* Download Error */}
-                  {downloadError && (
-                    <div className="text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-lg border border-red-500/20">
-                      {downloadError}
-                    </div>
-                  )}
+                {/* View Toggle - Forecast vs Past 10 Days */}
+                <div className={`flex gap-3 bg-black/20 p-3 rounded-xl border ${currentTheme.classes.border}`}>
+                  <button
+                    onClick={() => setShowPast10Days(false)}
+                    className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+                      !showPast10Days
+                        ? currentTheme.classes.buttonActive
+                        : currentTheme.classes.buttonSecondary
+                    }`}
+                  >
+                    📊 Forecast & Analysis
+                  </button>
+                  <button
+                    onClick={() => setShowPast10Days(true)}
+                    disabled={!past10DaysData}
+                    className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+                      showPast10Days
+                        ? currentTheme.classes.buttonActive
+                        : currentTheme.classes.buttonSecondary
+                    } ${!past10DaysData ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    📈 Past 10 Days
+                  </button>
                 </div>
+
+                {/* Past 10 Days Dashboard */}
+                {showPast10Days && (
+                  <Past10DaysDashboard 
+                    data={past10DaysData}
+                    theme={currentTheme}
+                    locationName={currentLocationName}
+                  />
+                )}
+
+                {/* Original Forecast View */}
+                {!showPast10Days && (
+                  <div className="space-y-4">
+                
+                    {/* Control Bar */}
+                    <div className={`flex flex-col gap-3 bg-black/20 p-3 rounded-xl border ${currentTheme.classes.border}`}>
+                      {/* Duration Selector Row */}
+                      <div className="flex items-center gap-3">
+                        <div className={`flex items-center gap-2 text-xs ${currentTheme.classes.textMuted}`}>
+                          <Clock className="w-4 h-4" />
+                          <span className="hidden sm:inline">View:</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {durationOptions.map(hours => (
+                            <button
+                              key={hours}
+                              onClick={() => setViewDuration(hours)}
+                              className={`px-2.5 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                                viewDuration === hours
+                                  ? currentTheme.classes.buttonActive
+                                  : `${currentTheme.classes.buttonSecondary} hover:bg-white/10`
+                              }`}
+                            >
+                              {hours === 0 ? 'All' : hours === 168 ? '7d' : `${hours}h`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Download Data Row */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2 border-t border-white/5">
+                        <div className={`flex items-center gap-2 text-xs ${currentTheme.classes.textMuted}`}>
+                          <Download className="w-4 h-4" />
+                          <span>Download Data:</span>
+                        </div>
+                        
+                        <div className="flex flex-wrap items-center gap-2 flex-1">
+                          {/* Date Range Picker */}
+                          <div className={`flex items-center gap-2 ${currentTheme.classes.bgInput} rounded-lg px-2 py-1.5 border border-white/5 flex-1 sm:flex-none`}>
+                            <Calendar className={`w-3.5 h-3.5 ${currentTheme.classes.textDim} flex-shrink-0`} />
+                            <input
+                              type="date"
+                              min={minHistoricalDate}
+                              max={maxForecastDate}
+                              value={downloadStartDate}
+                              onChange={(e) => {
+                                const newStart = e.target.value;
+                                if (newStart) {
+                                  setDownloadStartDate(newStart);
+                                  if (newStart > downloadEndDate) setDownloadEndDate(newStart);
+                                  setDownloadError('');
+                                }
+                              }}
+                              className={`bg-transparent text-xs font-medium outline-none cursor-pointer ${currentTheme.classes.textMain} [color-scheme:dark] w-[110px]`}
+                            />
+                            <ArrowRight className={`w-3 h-3 ${currentTheme.classes.textDim} flex-shrink-0`} />
+                            <input
+                              type="date"
+                              min={minHistoricalDate}
+                              max={maxForecastDate}
+                              value={downloadEndDate}
+                              onChange={(e) => {
+                                const newEnd = e.target.value;
+                                if (newEnd) {
+                                  setDownloadEndDate(newEnd);
+                                  if (newEnd < downloadStartDate) setDownloadStartDate(newEnd);
+                                  setDownloadError('');
+                                }
+                              }}
+                              className={`bg-transparent text-xs font-medium outline-none cursor-pointer ${currentTheme.classes.textMain} [color-scheme:dark] w-[110px]`}
+                            />
+                          </div>
+
+                          {/* Download Buttons */}
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => downloadData('csv')}
+                              disabled={isDownloadingHistorical}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg ${currentTheme.classes.buttonSecondary} border border-white/5 hover:bg-white/10 transition-all disabled:opacity-50`}
+                              title="Download as CSV"
+                            >
+                              {isDownloadingHistorical ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <FileSpreadsheet className="w-3.5 h-3.5" />
+                              )}
+                              CSV
+                            </button>
+                            <button 
+                              onClick={() => downloadData('json')}
+                              disabled={isDownloadingHistorical}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg ${currentTheme.classes.buttonSecondary} border border-white/5 hover:bg-white/10 transition-all disabled:opacity-50`}
+                              title="Download as JSON"
+                            >
+                              {isDownloadingHistorical ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <FileJson className="w-3.5 h-3.5" />
+                              )}
+                              JSON
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Date range info */}
+                      <div className={`text-xs ${currentTheme.classes.textDim} flex items-center gap-2`}>
+                        <span>📅 Select any date from {format(parseISO(minHistoricalDate), 'MMM yyyy')} to {format(parseISO(maxForecastDate), 'MMM dd, yyyy')} (historical + forecast)</span>
+                      </div>
+                      {/* Download Error */}
+                      {downloadError && (
+                        <div className="text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-lg border border-red-500/20">
+                          {downloadError}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Chart */}
                 <SolarChart 
@@ -837,7 +920,7 @@ function App() {
                   </div>
                 </div>
               </div>
-            )}
+              )}
             
             {/* Footer Note */}
             <div className={`p-3 bg-black/20 rounded-xl border ${currentTheme.classes.border} text-xs ${currentTheme.classes.textDim}`}>

@@ -4,7 +4,7 @@ import { LocationData, Theme } from '../types';
 import { geocodeLocation } from '../services/weatherService';
 
 interface InputSectionProps {
-  onDataReady: (location: LocationData, locationName: string) => void;
+  onDataReady: (location: LocationData, locationName: string, historical?: { startDate: string; endDate: string }) => void;
   isProcessing: boolean;
   theme: Theme;
 }
@@ -90,6 +90,16 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
   const [error, setError] = useState<string | null>(null);
   const [validationInfo, setValidationInfo] = useState<string | null>(null);
   const [locationDetails, setLocationDetails] = useState<{ country: string; lat: number; lon: number } | null>(null);
+  
+  // Direct coordinate inputs
+  const [inputLat, setInputLat] = useState('');
+  const [inputLon, setInputLon] = useState('');
+  const [useCoordinates, setUseCoordinates] = useState(false);
+  
+  // Historical data inputs
+  const [useHistorical, setUseHistorical] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -165,7 +175,7 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
     e.preventDefault();
 
     if (!location) {
-      if (searchQuery) {
+      if (searchQuery && !useCoordinates) {
         // Validate input first
         const inputValidation = validateLocationInput(searchQuery);
         if (!inputValidation.valid) {
@@ -175,8 +185,51 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
 
         await handleSearch();
         return;
+      } else if (useCoordinates) {
+        // Validate direct coordinates
+        const lat = parseFloat(inputLat);
+        const lon = parseFloat(inputLon);
+        
+        const coordValidation = validateCoordinates(lat, lon);
+        if (!coordValidation.valid) {
+          setError(coordValidation.message);
+          return;
+        }
+        
+        // Set location from coordinates
+        setLocation({
+          latitude: lat.toString(),
+          longitude: lon.toString()
+        });
+        setLocationName(`Coordinates (${lat.toFixed(2)}°, ${lon.toFixed(2)}°)`);
+        setLocationDetails({
+          country: 'Custom',
+          lat,
+          lon
+        });
       } else {
-        setError('Please search for a location.');
+        setError('Please search for a location or enter coordinates.');
+        return;
+      }
+    }
+
+    // Validate historical data if enabled
+    if (useHistorical) {
+      if (!startDate || !endDate) {
+        setError('Please select both start and end dates for historical data.');
+        return;
+      }
+      
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      
+      if (start >= end) {
+        setError('Start date must be before end date.');
+        return;
+      }
+      
+      if (end > new Date()) {
+        setError('End date cannot be in the future.');
         return;
       }
     }
@@ -190,7 +243,8 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
       }
     }
 
-    onDataReady(location, locationName || "Unknown Location");
+    const historical = useHistorical ? { startDate, endDate } : undefined;
+    onDataReady(location!, locationName || "Unknown Location", historical);
   };
 
   return (
@@ -202,7 +256,47 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
 
       <form onSubmit={handleSubmit} className="space-y-6">
         
+        {/* Input Method Toggle */}
+        <div>
+          <label className={`block text-xs font-medium ${theme.classes.textMuted} uppercase tracking-wider mb-3`}>Input Method</label>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUseCoordinates(false);
+                setError(null);
+                setLocation(null);
+                setLocationName(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
+                !useCoordinates
+                  ? theme.classes.buttonActive
+                  : theme.classes.buttonSecondary
+              }`}
+            >
+              City Search
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUseCoordinates(true);
+                setError(null);
+                setLocation(null);
+                setLocationName(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
+                useCoordinates
+                  ? theme.classes.buttonActive
+                  : theme.classes.buttonSecondary
+              }`}
+            >
+              Direct Coordinates
+            </button>
+          </div>
+        </div>
+        
         {/* Location Search */}
+        {!useCoordinates && (
         <div>
           <label className={`block text-xs font-medium ${theme.classes.textMuted} uppercase tracking-wider mb-2`}>Location</label>
           <p className={`text-xs ${theme.classes.textDim} mb-3`}>Enter a city name to search and validate</p>
@@ -248,7 +342,7 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
           </div>
           
           {/* Validation Success */}
-          {locationName && !error && (
+          {locationName && !error && !useCoordinates && (
              <div className="mt-3 flex items-start gap-2 text-xs text-green-400 bg-green-900/20 p-3 rounded border border-green-900/30">
                 <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
@@ -271,6 +365,138 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
             </div>
           )}
         </div>
+        )}
+
+        {/* Direct Coordinates Input */}
+        {useCoordinates && (
+        <div className="space-y-4">
+          <label className={`block text-xs font-medium ${theme.classes.textMuted} uppercase tracking-wider`}>Coordinates</label>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={`text-xs ${theme.classes.textDim} mb-2 block`}>Latitude (-90 to 90)</label>
+              <input
+                type="number"
+                placeholder="e.g. 52.52"
+                value={inputLat}
+                onChange={(e) => {
+                  setInputLat(e.target.value);
+                  setLocation(null);
+                  setLocationName(null);
+                  setError(null);
+                }}
+                step="0.01"
+                className={`w-full ${theme.classes.bgInput} border ${theme.classes.border} rounded-lg py-2 px-3 text-sm ${theme.classes.textMain} focus:ring-2 focus:ring-opacity-50 focus:ring-current focus:border-transparent outline-none transition-all`}
+                style={{ '--tw-ring-color': theme.id === 'cosmic' ? '#3b82f6' : theme.id === 'nature' ? '#10b981' : '#f97316' } as React.CSSProperties}
+              />
+            </div>
+            <div>
+              <label className={`text-xs ${theme.classes.textDim} mb-2 block`}>Longitude (-180 to 180)</label>
+              <input
+                type="number"
+                placeholder="e.g. 13.41"
+                value={inputLon}
+                onChange={(e) => {
+                  setInputLon(e.target.value);
+                  setLocation(null);
+                  setLocationName(null);
+                  setError(null);
+                }}
+                step="0.01"
+                className={`w-full ${theme.classes.bgInput} border ${theme.classes.border} rounded-lg py-2 px-3 text-sm ${theme.classes.textMain} focus:ring-2 focus:ring-opacity-50 focus:ring-current focus:border-transparent outline-none transition-all`}
+                style={{ '--tw-ring-color': theme.id === 'cosmic' ? '#3b82f6' : theme.id === 'nature' ? '#10b981' : '#f97316' } as React.CSSProperties}
+              />
+            </div>
+          </div>
+          <p className={`text-xs ${theme.classes.textDim}`}>Example: Berlin - Latitude: 52.52, Longitude: 13.41</p>
+
+          {/* Validation Success for Coordinates */}
+          {location && !error && (
+            <div className="mt-3 flex items-start gap-2 text-xs text-green-400 bg-green-900/20 p-3 rounded border border-green-900/30">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium">Coordinates Validated</p>
+                <p>{locationName}</p>
+              </div>
+            </div>
+          )}
+        </div>
+        )}
+
+        {/* Historical Data Toggle */}
+        {location && (
+        <div>
+          <label className={`block text-xs font-medium ${theme.classes.textMuted} uppercase tracking-wider mb-3`}>Data Type</label>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUseHistorical(false);
+                setError(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
+                !useHistorical
+                  ? theme.classes.buttonActive
+                  : theme.classes.buttonSecondary
+              }`}
+            >
+              Real-time Forecast
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUseHistorical(true);
+                setError(null);
+              }}
+              className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
+                useHistorical
+                  ? theme.classes.buttonActive
+                  : theme.classes.buttonSecondary
+              }`}
+            >
+              Historical Data
+            </button>
+          </div>
+        </div>
+        )}
+
+        {/* Historical Date Range */}
+        {useHistorical && location && (
+        <div className="space-y-4">
+          <label className={`block text-xs font-medium ${theme.classes.textMuted} uppercase tracking-wider`}>Date Range</label>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={`text-xs ${theme.classes.textDim} mb-2 block`}>Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setError(null);
+                }}
+                max={endDate || new Date().toISOString().split('T')[0]}
+                className={`w-full ${theme.classes.bgInput} border ${theme.classes.border} rounded-lg py-2 px-3 text-sm ${theme.classes.textMain} focus:ring-2 focus:ring-opacity-50 focus:ring-current focus:border-transparent outline-none transition-all`}
+                style={{ '--tw-ring-color': theme.id === 'cosmic' ? '#3b82f6' : theme.id === 'nature' ? '#10b981' : '#f97316' } as React.CSSProperties}
+              />
+            </div>
+            <div>
+              <label className={`text-xs ${theme.classes.textDim} mb-2 block`}>End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setError(null);
+                }}
+                min={startDate || '1940-01-01'}
+                max={new Date().toISOString().split('T')[0]}
+                className={`w-full ${theme.classes.bgInput} border ${theme.classes.border} rounded-lg py-2 px-3 text-sm ${theme.classes.textMain} focus:ring-2 focus:ring-opacity-50 focus:ring-current focus:border-transparent outline-none transition-all`}
+                style={{ '--tw-ring-color': theme.id === 'cosmic' ? '#3b82f6' : theme.id === 'nature' ? '#10b981' : '#f97316' } as React.CSSProperties}
+              />
+            </div>
+          </div>
+          <p className={`text-xs ${theme.classes.textDim}`}>Access historical data from 1940 onwards (ERA5 dataset)</p>
+        </div>
+        )}
 
         {/* Error Messages */}
         {error && (
@@ -292,7 +518,7 @@ const InputSection: React.FC<InputSectionProps> = ({ onDataReady, isProcessing, 
               : theme.classes.buttonPrimary
           }`}
         >
-          {isProcessing ? 'Generating Forecast...' : location ? 'Generate Forecast' : 'Search for Location First'}
+          {isProcessing ? 'Loading Data...' : location ? (useHistorical ? 'Load Historical Data' : 'Generate Forecast') : 'Enter Location First'}
         </button>
       </form>
     </div>

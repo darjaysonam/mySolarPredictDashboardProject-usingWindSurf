@@ -1,0 +1,8 @@
+# Navigate to your project (if not already there)
+cd path\to\your\project
+
+# Install dependencies (first time only)
+npm install
+
+# Start the app
+npm run dev

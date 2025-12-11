@@ -3,7 +3,7 @@ import { StoredSession } from '../types';
 // NOTE: In a production environment, this would be replaced by Firebase Firestore SDK calls.
 // Since we cannot provision a real Firebase project for this demo, we use LocalStorage.
 
-const STORAGE_KEY = 'solarcast_history_v1';
+const STORAGE_KEY = 'nyim_namzhi_history_v1';
 
 export const saveSession = (session: Omit<StoredSession, 'id' | 'date'>): StoredSession => {
   const newSession: StoredSession = {

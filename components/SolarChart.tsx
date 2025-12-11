@@ -115,7 +115,7 @@ const SolarChart: React.FC<SolarChartProps> = ({ history, forecast, weather, the
 
       const link = document.createElement('a');
       const safeName = locationName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      link.download = `solarcast_${safeName}_${format(new Date(), 'yyyy-MM-dd_HH-mm')}.jpg`;
+      link.download = `nyim-namzhi_${safeName}_${format(new Date(), 'yyyy-MM-dd_HH-mm')}.jpg`;
       link.href = canvas.toDataURL('image/jpeg', 0.95);
       link.click();
     } catch (error) {

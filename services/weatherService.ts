@@ -389,6 +389,22 @@ export const fetchRecentHistoricalWeather = async (location: LocationData): Prom
 };
 
 /**
+ * Fetch past 10 days of weather data for dashboard view
+ * Includes: temperature, humidity, wind speed, and solar radiation
+ */
+export const fetchPast10DaysData = async (location: LocationData): Promise<HistoricalWeatherData> => {
+  const endDate = new Date();
+  endDate.setDate(endDate.getDate() - 1); // Yesterday
+  
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 11); // 10 days ago
+
+  const formatDate = (d: Date) => d.toISOString().split('T')[0];
+
+  return fetchHistoricalWeather(location, formatDate(startDate), formatDate(endDate));
+};
+
+/**
  * Get weather analysis summary
  */
 export const getWeatherAnalysis = (weatherData: EnhancedWeatherForecast): RealTimeWeatherAnalysis | null => {
